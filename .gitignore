@@ -1,0 +1,30 @@
+# Environment
+backend/.env
+.env.prod
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/.turbo/
+
+# Docker volumes / local data
+postgres_data/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Certs
+nginx/certs/
