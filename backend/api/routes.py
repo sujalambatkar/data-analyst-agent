@@ -7,8 +7,12 @@ from typing import AsyncGenerator
 
 import groq as groq_sdk
 import pandas as pd
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 from langchain_groq import ChatGroq
 
 from backend.agent.graph import build_graph
@@ -309,7 +313,8 @@ async def _eda_stream(table_name: str) -> AsyncGenerator[str, None]:
 
 
 @router.get("/eda/{table_name}")
-async def eda_endpoint(table_name: str) -> StreamingResponse:
+@limiter.limit("10/minute")
+async def eda_endpoint(request: Request, table_name: str) -> StreamingResponse:
     engine = get_engine()
     if not _validate_table_name(table_name, engine):
         async def _not_found():
@@ -328,9 +333,10 @@ async def eda_endpoint(table_name: str) -> StreamingResponse:
 
 
 @router.post("/query")
-async def query_endpoint(request: QueryRequest) -> StreamingResponse:
+@limiter.limit("10/minute")
+async def query_endpoint(request: Request, body: QueryRequest) -> StreamingResponse:
     return StreamingResponse(
-        _event_stream(request),
+        _event_stream(body),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -384,7 +390,8 @@ async def clear_session(session_id: str) -> dict:
 
 
 @router.post("/report")
-async def generate_report(payload: dict) -> dict:
+@limiter.limit("5/minute")
+async def generate_report(request: Request, payload: dict) -> dict:
     """Generate a professional markdown business report from a conversation."""
     try:
         exchanges = payload.get("exchanges", [])

@@ -130,6 +130,16 @@ def seed() -> None:
         Column("segment",     String(20), nullable=False),
     )
 
+    # Skip seeding if data already exists (idempotent for Render/production deploys)
+    try:
+        with engine.connect() as conn:
+            count = conn.execute(text("SELECT COUNT(*) FROM products")).scalar()
+            if count and count > 0:
+                print("[seed] Tables already populated — skipping seed.")
+                return
+    except Exception:
+        pass  # Tables don't exist yet — proceed with full seed
+
     with engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS sales"))
         conn.execute(text("DROP TABLE IF EXISTS customers"))

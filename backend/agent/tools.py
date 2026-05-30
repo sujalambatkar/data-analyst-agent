@@ -2,7 +2,6 @@ import json
 import re
 from typing import Any
 
-import docker
 import numpy as np
 import plotly.graph_objects as go
 from sqlalchemy import inspect, text
@@ -260,6 +259,10 @@ def forecast_trend(table_name: str, date_col: str, value_col: str, periods: int,
 def run_python(code: str, data: dict | None = None) -> dict:
     """Execute Python code inside an isolated Docker container."""
     import os
+    try:
+        import docker
+    except ImportError:
+        return {"success": False, "error": "Docker SDK not available in this environment."}
 
     image = os.getenv("SANDBOX_IMAGE", "analyst-sandbox:latest")
     payload = json.dumps({"code": code, "data": data or {}})
