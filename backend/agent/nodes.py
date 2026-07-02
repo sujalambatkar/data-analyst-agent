@@ -27,7 +27,8 @@ RULES:
 2. Charts are generated automatically from query results — just run query_sql, then final_answer.
 3. Always alias aggregates: SUM(x) AS x, COUNT(*) AS count, AVG(x) AS avg_x.
 4. SELECT only — never INSERT/UPDATE/DELETE/DROP.
-5. After seeing query results, immediately call final_answer with the complete answer.
+5. After seeing query results, immediately call final_answer with the complete answer. Never run a second query to "improve" or "add detail" — one query is enough.
+6. When the user asks for a chart/graph/plot/bar/line/pie/trend, your query MUST return a label column AND a numeric column so it can be plotted — always GROUP BY a category or time period (e.g. SELECT region, SUM(revenue) AS revenue FROM sales GROUP BY region). Never return a single aggregate value for a chart request.
 
 FORMAT every turn:
 Thought: <one sentence>
@@ -106,7 +107,38 @@ def _extract_json(text: str, marker: str) -> dict | list | None:
     return None
 
 
+_LABEL_RE = re.compile(
+    r"[*_`#\s]*\b(Thought|Action Input|Action|Final Answer)\b[*_`\s]*:[*_`\s]*",
+    re.IGNORECASE,
+)
+
+_LABEL_CANONICAL = {
+    "thought": "Thought",
+    "action input": "Action Input",
+    "action": "Action",
+    "final answer": "Final Answer",
+}
+
+
+def _normalize_labels(text: str) -> str:
+    """
+    Groq's Llama 4 Scout frequently wraps ReAct labels in markdown
+    (e.g. "**Action:**", "`Action:`", "**Action**:") since we drive it with a
+    plain-text prompt rather than native tool-calling. The label regexes below
+    expect a literal "Action:" etc., so markdown noise around the label makes
+    them silently fail to match, leaving action/thought unset. Normalize just
+    the label + colon (not the JSON/SQL payload that follows) to plain text.
+    """
+
+    def repl(match: re.Match) -> str:
+        canonical = _LABEL_CANONICAL[match.group(1).lower()]
+        return f"\n{canonical}: "
+
+    return _LABEL_RE.sub(repl, text)
+
+
 def _parse_llm_response(text: str) -> dict[str, Any]:
+    text = _normalize_labels(text)
     result: dict[str, Any] = {}
 
     thought_match = re.search(r"Thought:\s*(.*?)(?=\nAction:|\nFinal Answer:|$)", text, re.DOTALL)
@@ -282,6 +314,17 @@ def tool_node(state: AgentState) -> AgentState:
         obs_for_msg["truncated"] = True
 
     obs_text = f"Observation: {json.dumps(obs_for_msg, default=str)}"
+
+    # Nudge the model to finish. Small models (Llama 4 Scout) tend to keep running
+    # "just one more" query and blow the iteration budget without ever calling
+    # final_answer. Once a query succeeded, the answer is in hand — tell it to stop.
+    # Any chart the user asked for is rendered automatically from these rows.
+    if action == "query_sql" and observation.get("success") and observation.get("rows"):
+        obs_text += (
+            "\n\nYou now have the data needed. Do NOT run another query. "
+            "Respond with `Final Answer:` containing the specific numbers from the rows above."
+        )
+
     messages.append({"role": "user", "content": obs_text})
 
     new_state = dict(state)

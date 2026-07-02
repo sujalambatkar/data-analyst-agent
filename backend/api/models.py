@@ -9,7 +9,7 @@ class QueryRequest(BaseModel):
         description="Session identifier (alphanumeric, hyphens, underscores; max 64 chars)",
     )
     datasource: str = Field(default="postgres", description="Datasource to query")
-    max_iterations: int = Field(default=3, ge=1, le=6, description="Maximum agent loop iterations")
+    max_iterations: int = Field(default=4, ge=1, le=6, description="Maximum agent loop iterations")
 
 
 class SessionResponse(BaseModel):

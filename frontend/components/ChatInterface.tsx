@@ -158,7 +158,7 @@ export default function ChatInterface({ exampleQuestions = DEFAULT_EXAMPLES }: C
     });
 
     const cancel = streamQuery(
-      { question, session_id: sessionId, datasource: "postgres", max_iterations: 3 },
+      { question, session_id: sessionId, datasource: "postgres", max_iterations: 4 },
       (event: SSEEvent) => {
         if (event.type === "thought" || event.type === "action" || event.type === "observation") {
           updateLastAssistant((m) => ({ ...m, thoughts: [...m.thoughts, event] }));

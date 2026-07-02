@@ -306,18 +306,33 @@ def create_chart(chart_type: str, data: list, title: str, x_col: str, y_col: str
             return {"success": False, "error": "No data provided. Run query_sql first, then call create_chart."}
 
         available = list(data[0].keys())
+        numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float)) and v is not None]
+        text_cols = [k for k in available if k not in numeric_cols]
 
-        # Auto-detect columns when specified names don't match what the query returned.
-        # This handles cases where the model uses wrong aliases (e.g. "revenue" vs "sum").
-        if x_col not in available or y_col not in available:
-            numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float)) and v is not None]
-            text_cols    = [k for k in available if k not in numeric_cols]
-            if x_col not in available:
-                x_col = text_cols[0] if text_cols else available[0]
-            if y_col not in available:
-                y_col = numeric_cols[0] if numeric_cols else available[-1]
+        # y must be numeric even if the model's y_col name happens to match a text
+        # column (e.g. picking "month" instead of "total_revenue") — trust the data's
+        # types over the model's pick, since smaller models often mis-assign axes when
+        # a query returns 3+ columns.
+        if y_col not in numeric_cols:
+            y_col = numeric_cols[0] if numeric_cols else (available[-1] if available else y_col)
 
-        xs = [row[x_col] for row in data]
+        # When a query returns multiple non-numeric columns (e.g. "year" + "month" from
+        # a GROUP BY), a single one of them is often constant or non-monotonic per row,
+        # collapsing a trend line onto one point. Combine all such columns into one
+        # composite x-axis label instead of guessing which single column is "the" x.
+        combine_cols = [c for c in text_cols if c != y_col]
+        if len(combine_cols) > 1:
+            xs = [" - ".join(str(row[c]) for c in combine_cols) for row in data]
+            x_col = "-".join(combine_cols)
+        elif x_col in available and x_col != y_col:
+            xs = [row[x_col] for row in data]
+        elif combine_cols:
+            x_col = combine_cols[0]
+            xs = [row[x_col] for row in data]
+        else:
+            x_col = available[0]
+            xs = [row[x_col] for row in data]
+
         ys = [row[y_col] for row in data]
 
         chart_type = chart_type.lower()
