@@ -1,11 +1,27 @@
 import json
 import re
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
+
+
+def _normalize_value(v: Any) -> Any:
+    """
+    Coerce DB driver types into JSON/Plotly-friendly primitives.
+    Postgres NUMERIC comes back as Decimal, which fails isinstance(int|float)
+    checks downstream and serializes as a string via json.dumps(default=str) —
+    both of which silently break chart column detection.
+    """
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    return v
 
 
 def _next_months(last_month: str, n: int) -> list[str]:
@@ -37,7 +53,10 @@ def query_sql(query: str, engine: Engine) -> dict:
         with engine.connect() as conn:
             result = conn.execute(text(query))
             columns = list(result.keys())
-            rows = [dict(zip(columns, row)) for row in result.fetchmany(500)]
+            rows = [
+                {col: _normalize_value(val) for col, val in zip(columns, row)}
+                for row in result.fetchmany(500)
+            ]
             return {"success": True, "rows": rows, "columns": columns, "row_count": len(rows)}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -306,34 +325,70 @@ def create_chart(chart_type: str, data: list, title: str, x_col: str, y_col: str
             return {"success": False, "error": "No data provided. Run query_sql first, then call create_chart."}
 
         available = list(data[0].keys())
-        numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float)) and v is not None]
-        text_cols = [k for k in available if k not in numeric_cols]
+
+        def _first_non_null(col: str) -> Any:
+            for row in data[:20]:
+                if row.get(col) is not None:
+                    return row[col]
+            return None
+
+        def _is_numeric(v: Any) -> bool:
+            return isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+
+        numeric_cols = [c for c in available if _is_numeric(_first_non_null(c))]
+        text_cols = [c for c in available if c not in numeric_cols]
 
         # y must be numeric even if the model's y_col name happens to match a text
-        # column (e.g. picking "month" instead of "total_revenue") — trust the data's
-        # types over the model's pick, since smaller models often mis-assign axes when
-        # a query returns 3+ columns.
+        # column (e.g. picking "month" instead of "total_revenue"). Fall back to the
+        # LAST numeric column: aggregates conventionally come last in a SELECT list
+        # (SELECT region, SUM(revenue) ...), while leading numerics are often
+        # year/month grouping keys.
         if y_col not in numeric_cols:
-            y_col = numeric_cols[0] if numeric_cols else (available[-1] if available else y_col)
+            y_col = numeric_cols[-1] if numeric_cols else (available[-1] if available else y_col)
 
-        # When a query returns multiple non-numeric columns (e.g. "year" + "month" from
-        # a GROUP BY), a single one of them is often constant or non-monotonic per row,
-        # collapsing a trend line onto one point. Combine all such columns into one
-        # composite x-axis label instead of guessing which single column is "the" x.
-        combine_cols = [c for c in text_cols if c != y_col]
-        if len(combine_cols) > 1:
-            xs = [" - ".join(str(row[c]) for c in combine_cols) for row in data]
-            x_col = "-".join(combine_cols)
-        elif x_col in available and x_col != y_col:
-            xs = [row[x_col] for row in data]
-        elif combine_cols:
-            x_col = combine_cols[0]
-            xs = [row[x_col] for row in data]
-        else:
-            x_col = available[0]
-            xs = [row[x_col] for row in data]
+        # x-axis label candidates, in preference order: non-numeric columns, then
+        # date-like numeric columns (year/month grouping keys), then anything != y.
+        dateish = ("year", "month", "day", "week", "date", "quarter", "period", "time", "hour")
+        label_cols = [c for c in text_cols if c != y_col]
+        if not label_cols:
+            label_cols = [c for c in numeric_cols if c != y_col and any(t in c.lower() for t in dateish)]
+        if not label_cols:
+            label_cols = [c for c in available if c != y_col]
 
-        ys = [row[y_col] for row in data]
+        def _column_xs(col: str) -> list:
+            return [row.get(col) for row in data]
+
+        xs: list = []
+        if x_col in available and x_col != y_col:
+            xs = _column_xs(x_col)
+            # A constant x (e.g. year="2020" on every row) collapses the whole
+            # chart onto one point — treat it as a bad pick and re-resolve.
+            if len(data) > 1 and len({str(v) for v in xs}) <= 1:
+                xs = []
+        if not xs:
+            if len(label_cols) > 1:
+                # Multiple grouping columns (year + month): combine into one
+                # composite label instead of guessing which single one is "the" x.
+                xs = [" - ".join(str(row.get(c)) for c in label_cols) for row in data]
+                x_col = "-".join(label_cols)
+            elif label_cols:
+                x_col = label_cols[0]
+                xs = _column_xs(x_col)
+            else:
+                x_col = available[0]
+                xs = _column_xs(x_col)
+
+        def _to_num(v: Any) -> Any:
+            if _is_numeric(v):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    return float(v.replace(",", ""))
+                except ValueError:
+                    return v
+            return v
+
+        ys = [_to_num(row.get(y_col)) for row in data]
 
         chart_type = chart_type.lower()
         if chart_type == "bar":

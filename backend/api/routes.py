@@ -137,29 +137,8 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
                 if last_obs:
                     yield _sse("observation", {"content": last_obs["content"]})
 
-                    # Auto-generate chart when question requests one — no extra LLM call
-                    try:
-                        obs_json = json.loads(last_obs["content"].replace("Observation:", "", 1).strip())
-                        q_lower = request.question.lower()
-                        chart_kw = {"chart", "plot", "graph", "visualize", "trend", "bar", "line", "pie", "scatter", "visual"}
-                        if (obs_json.get("success") and obs_json.get("rows")
-                                and any(kw in q_lower for kw in chart_kw)):
-                            rows = obs_json["rows"]
-                            cols = obs_json.get("columns") or (list(rows[0].keys()) if rows else [])
-                            if len(cols) >= 2:
-                                ctype = ("pie" if "pie" in q_lower
-                                         else "line" if ("line" in q_lower or "trend" in q_lower)
-                                         else "scatter" if "scatter" in q_lower
-                                         else "bar")
-                                x_col, y_col = cols[0], next((c for c in cols[1:] if c != cols[0]), cols[-1])
-                                engine = get_engine()
-                                auto_chart = create_chart(ctype, rows, request.question[:60], x_col, y_col)
-                                if auto_chart.get("success"):
-                                    yield _sse("chart", {"chart_json": auto_chart["chart_json"], "title": auto_chart.get("title", "Chart")})
-                                    charts_emitted += 1
-                    except Exception:
-                        pass  # never break the stream over a chart failure
-
+                # Charts (auto-generated from query rows, forecasts, explicit
+                # create_chart) all live in state["charts"] — stream new ones.
                 all_charts = node_state.get("charts", [])
                 for chart in all_charts[charts_emitted:]:
                     yield _sse("chart", {"chart_json": chart["chart_json"], "title": chart.get("title", "")})

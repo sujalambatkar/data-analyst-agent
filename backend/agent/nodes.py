@@ -166,6 +166,39 @@ def _parse_llm_response(text: str) -> dict[str, Any]:
     return result
 
 
+def _auto_chart_from_rows(question: str, rows: list) -> dict | None:
+    """
+    Build a chart directly from query results whenever they are chartable,
+    without requiring the model to call create_chart (it reliably won't) or
+    the question to contain a chart keyword. Runs on the FULL result set —
+    the observation stored in messages is truncated to 8 rows for token
+    budget, which previously capped auto-charts at 8 points.
+    """
+    if not rows or len(rows) < 2:
+        return None
+    first = rows[0]
+    if len(first) < 2:
+        return None
+    if not any(isinstance(v, (int, float)) and not isinstance(v, bool) for v in first.values()):
+        return None
+
+    q = (question or "").lower()
+    if "pie" in q:
+        ctype = "pie"
+    elif "scatter" in q:
+        ctype = "scatter"
+    elif any(k in q for k in ("line", "trend", "over time", "time series", "growth", "monthly", "weekly", "daily")):
+        ctype = "line"
+    else:
+        ctype = "bar"
+
+    result = create_chart(ctype, rows, (question or "Chart")[:60], "", "")
+    if result.get("success"):
+        return {"chart_json": result["chart_json"], "title": result.get("title", "Chart")}
+    logger.warning("Auto-chart failed: %s", result.get("error"))
+    return None
+
+
 def reason_node(state: AgentState) -> AgentState:
     llm = _build_llm()
     system_content = SYSTEM_PROMPT.format(schema_info=state.get("schema_info", "Not loaded yet"))
@@ -238,6 +271,11 @@ def tool_node(state: AgentState) -> AgentState:
         observation = query_sql(query, engine)
         if query:
             code_used.append(f"-- SQL\n{query}")
+        if observation.get("success"):
+            auto = _auto_chart_from_rows(state.get("question", ""), observation.get("rows", []))
+            if auto:
+                charts.append(auto)
+                logger.info("Auto-chart generated from query rows: %s", auto["title"])
 
     elif action == "profile_table":
         table_name = action_input.get("table_name", "")
