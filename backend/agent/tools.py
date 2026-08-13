@@ -346,37 +346,81 @@ def create_chart(chart_type: str, data: list, title: str, x_col: str, y_col: str
         if y_col not in numeric_cols:
             y_col = numeric_cols[-1] if numeric_cols else (available[-1] if available else y_col)
 
-        # x-axis label candidates, in preference order: non-numeric columns, then
-        # date-like numeric columns (year/month grouping keys), then anything != y.
-        dateish = ("year", "month", "day", "week", "date", "quarter", "period", "time", "hour")
-        label_cols = [c for c in text_cols if c != y_col]
+        # x-axis label candidates, in preference order: date-like columns
+        # (year/month/etc, regardless of type) first — a trend/line chart
+        # should progress along time when a time column exists, even if a
+        # text column (e.g. product name) is also present — then any other
+        # non-numeric column, then anything != y.
+        # Ordered coarsest-to-finest so a composite label/sort-key built from
+        # multiple date parts (e.g. "month" + "year" selected in that order)
+        # reads and sorts chronologically (year-month), not by whatever order
+        # the SQL happened to list the columns in (which would sort by month
+        # first, scrambling years together).
+        dateish = ("year", "quarter", "month", "week", "date", "day", "time", "hour", "period")
+
+        def _date_rank(col: str) -> int:
+            low = col.lower()
+            for i, term in enumerate(dateish):
+                if term in low:
+                    return i
+            return len(dateish)
+
+        label_cols = sorted(
+            (c for c in available if c != y_col and any(t in c.lower() for t in dateish)),
+            key=_date_rank,
+        )
         if not label_cols:
-            label_cols = [c for c in numeric_cols if c != y_col and any(t in c.lower() for t in dateish)]
+            label_cols = [c for c in text_cols if c != y_col]
         if not label_cols:
             label_cols = [c for c in available if c != y_col]
 
         def _column_xs(col: str) -> list:
             return [row.get(col) for row in data]
 
+        def _sort_key(v: Any) -> tuple:
+            # (type_rank, value) so numeric and string x-values never get
+            # compared directly against each other (which raises in Python),
+            # and numeric labels sort numerically rather than lexicographically
+            # ("2020 - 2" before "2020 - 10", not after).
+            if _is_numeric(v):
+                return (0, float(v))
+            if isinstance(v, str):
+                try:
+                    return (0, float(v.replace(",", "")))
+                except ValueError:
+                    return (1, v)
+            return (1, str(v))
+
         xs: list = []
+        sort_keys: list = []
+        x_used_cols: set = set()
         if x_col in available and x_col != y_col:
-            xs = _column_xs(x_col)
+            raw = _column_xs(x_col)
             # A constant x (e.g. year="2020" on every row) collapses the whole
             # chart onto one point — treat it as a bad pick and re-resolve.
-            if len(data) > 1 and len({str(v) for v in xs}) <= 1:
-                xs = []
+            if not (len(data) > 1 and len({str(v) for v in raw}) <= 1):
+                xs = raw
+                sort_keys = [_sort_key(v) for v in raw]
+                x_used_cols = {x_col}
         if not xs:
             if len(label_cols) > 1:
                 # Multiple grouping columns (year + month): combine into one
                 # composite label instead of guessing which single one is "the" x.
-                xs = [" - ".join(str(row.get(c)) for c in label_cols) for row in data]
+                col_vals = [[row.get(c) for c in label_cols] for row in data]
+                xs = [" - ".join(str(v) for v in vals) for vals in col_vals]
+                sort_keys = [tuple(_sort_key(v) for v in vals) for vals in col_vals]
                 x_col = "-".join(label_cols)
+                x_used_cols = set(label_cols)
             elif label_cols:
                 x_col = label_cols[0]
                 xs = _column_xs(x_col)
+                sort_keys = [_sort_key(v) for v in xs]
+                x_used_cols = {x_col}
             else:
                 x_col = available[0]
                 xs = _column_xs(x_col)
+                sort_keys = [_sort_key(v) for v in xs]
+                x_used_cols = {x_col}
 
         def _to_num(v: Any) -> Any:
             if _is_numeric(v):
@@ -391,18 +435,53 @@ def create_chart(chart_type: str, data: list, title: str, x_col: str, y_col: str
         ys = [_to_num(row.get(y_col)) for row in data]
 
         chart_type = chart_type.lower()
-        if chart_type == "bar":
-            trace = go.Bar(x=xs, y=ys, name=y_col)
-        elif chart_type == "line":
-            trace = go.Scatter(x=xs, y=ys, mode="lines+markers", name=y_col)
-        elif chart_type == "scatter":
-            trace = go.Scatter(x=xs, y=ys, mode="markers", name=y_col)
-        elif chart_type == "pie":
-            trace = go.Pie(labels=xs, values=ys, name=title)
-        else:
-            return {"success": False, "error": f"Unsupported chart type: {chart_type}"}
 
-        fig = go.Figure(data=[trace])
+        # A leftover column not used for x or y (e.g. product_id when the
+        # x-axis is year) means the same x value can repeat once per group —
+        # connecting those rows in raw SQL order draws one nonsensical
+        # zigzagging line through unrelated groups. Split into one sorted
+        # series per group instead; if there are too many groups to show
+        # legibly, aggregate (sum) across them into a single coherent trend.
+        MAX_SERIES = 20
+        leftover_cols = [c for c in available if c != y_col and c not in x_used_cols]
+        series_col = leftover_cols[0] if leftover_cols and chart_type != "pie" else None
+
+        series: list[tuple[str, list, list]] = []
+        if series_col:
+            groups: dict[Any, list[tuple[Any, tuple, Any]]] = {}
+            for row, x, sk, y in zip(data, xs, sort_keys, ys):
+                groups.setdefault(row.get(series_col), []).append((x, sk, y))
+            if 1 < len(groups) <= MAX_SERIES:
+                for key, pts in groups.items():
+                    pts.sort(key=lambda p: p[1])
+                    series.append((f"{series_col}={key}", [p[0] for p in pts], [p[2] for p in pts]))
+            elif len(groups) > MAX_SERIES:
+                agg: dict[Any, float] = {}
+                agg_key: dict[Any, tuple] = {}
+                for x, sk, y in zip(xs, sort_keys, ys):
+                    agg[x] = agg.get(x, 0.0) + (y if isinstance(y, (int, float)) else 0.0)
+                    agg_key[x] = sk
+                ordered = sorted(agg.keys(), key=lambda x: agg_key[x])
+                series.append((f"Total {y_col}", ordered, [agg[x] for x in ordered]))
+
+        if not series:
+            pts = sorted(zip(xs, sort_keys, ys), key=lambda p: p[1])
+            series.append((y_col, [p[0] for p in pts], [p[2] for p in pts]))
+
+        traces = []
+        for name, sx, sy in series:
+            if chart_type == "bar":
+                traces.append(go.Bar(x=sx, y=sy, name=name))
+            elif chart_type == "line":
+                traces.append(go.Scatter(x=sx, y=sy, mode="lines+markers", name=name))
+            elif chart_type == "scatter":
+                traces.append(go.Scatter(x=sx, y=sy, mode="markers", name=name))
+            elif chart_type == "pie":
+                traces.append(go.Pie(labels=sx, values=sy, name=title))
+            else:
+                return {"success": False, "error": f"Unsupported chart type: {chart_type}"}
+
+        fig = go.Figure(data=traces)
         fig.update_layout(title=title, xaxis_title=x_col, yaxis_title=y_col)
         return {"success": True, "chart_json": fig.to_json(), "title": title}
     except Exception as e:
