@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 
 import groq as groq_sdk
 import pandas as pd
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -48,7 +48,7 @@ def _generate_followups(question: str, answer: str, schema_info: str) -> list[st
     """Ask the LLM for 3 concise follow-up questions given the current Q&A."""
     try:
         llm = ChatGroq(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY", ""),
             temperature=0.3,
         )
@@ -88,7 +88,11 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
             schema_info = "Schema unavailable"
 
         history_key = f"session:{request.session_id}:history"
-        raw_history = redis.get(history_key)
+        try:
+            raw_history = redis.get(history_key)
+        except Exception as e:
+            logger.warning("Redis history read failed for session %s: %s", request.session_id, e)
+            raw_history = None
         prior_messages: list = json.loads(raw_history) if raw_history else []
 
         initial_state: AgentState = {
@@ -144,9 +148,14 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
                     yield _sse("chart", {"chart_json": chart["chart_json"], "title": chart.get("title", "")})
                 charts_emitted = len(all_charts)
 
-        # Persist conversation
+        # Persist conversation. The answer below is already fully computed and
+        # streamed by this point, so a Redis blip here must not abort the
+        # response — only the next turn loses conversation continuity.
         all_messages = final_state.get("messages", [])
-        redis.setex(history_key, 3600 * 24, json.dumps(all_messages, default=str))
+        try:
+            redis.setex(history_key, 3600 * 24, json.dumps(all_messages, default=str))
+        except Exception as e:
+            logger.warning("Redis history write failed for session %s: %s", request.session_id, e)
 
         final_answer = final_state.get("final_answer")
         if not final_answer:
@@ -202,7 +211,7 @@ def _generate_eda_summary(table_name: str, profile: dict) -> str:
     """Ask the LLM to write a plain-English summary of the table profile."""
     try:
         llm = ChatGroq(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="llama-3.3-70b-versatile",
             api_key=os.getenv("GROQ_API_KEY", ""),
             temperature=0.2,
         )
@@ -385,7 +394,7 @@ async def generate_report(request: Request, payload: dict) -> dict:
                 conv_lines.append(f"SQL: {ex['sql'][0][:200]}")
             conv_lines.append("")
 
-        llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", api_key=os.getenv("GROQ_API_KEY", ""), temperature=0.3)
+        llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY", ""), temperature=0.3)
         prompt = (
             "You are a senior data analyst writing a business report. "
             "Based on the analysis conversation below, produce a professional Markdown report.\n\n"
@@ -462,7 +471,7 @@ async def upload_csv(file: UploadFile = File(...), if_exists: str = "replace") -
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
+async def health_check(response: Response) -> HealthResponse:
     postgres_ok = False
     redis_ok = False
     try:
@@ -477,6 +486,15 @@ async def health_check() -> HealthResponse:
         redis_ok = True
     except Exception:
         pass
+
+    # A non-200 here lets Render's own healthCheckPath detect a real outage
+    # and restart the service — previously this always returned 200 even
+    # when both dependencies were unreachable, so Render could never tell.
+    # This does not break the UptimeRobot keep-alive ping: Render's spin-down
+    # timer resets on any inbound request regardless of status code.
+    if not (postgres_ok and redis_ok):
+        response.status_code = 503
+
     return HealthResponse(
         status="ok" if postgres_ok and redis_ok else "degraded",
         postgres=postgres_ok,

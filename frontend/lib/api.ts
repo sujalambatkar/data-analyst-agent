@@ -36,34 +36,67 @@ export interface SchemaResponse {
   tables: Record<string, TableInfo>;
 }
 
-export function streamQuery(
-  payload: QueryPayload,
-  onEvent: (event: SSEEvent) => void,
+// If no bytes arrive for this long, the connection is treated as stalled
+// (Render cold start / a dropped proxy connection) and aborted with a
+// visible error — otherwise the fetch reader can hang forever with no
+// onDone/onError ever firing, leaving the UI spinner stuck indefinitely.
+const SSE_IDLE_TIMEOUT_MS = 55000;
+
+function streamSSE<E>(
+  url: string,
+  init: RequestInit,
+  onEvent: (event: E) => void,
   onDone: () => void,
-  onError: (err: string) => void
+  onError: (err: string) => void,
+  idleTimeoutMs: number = SSE_IDLE_TIMEOUT_MS
 ): () => void {
   const controller = new AbortController();
+  let settled = false;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
 
-  fetch("/api/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal: controller.signal,
-  })
+  const clearWatchdog = () => {
+    if (watchdog) clearTimeout(watchdog);
+  };
+
+  const resetWatchdog = () => {
+    clearWatchdog();
+    watchdog = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
+      onError("No response from server — the connection may have stalled. Please try again.");
+    }, idleTimeoutMs);
+  };
+
+  const finishOnce = (fn: () => void) => {
+    if (settled) return;
+    settled = true;
+    clearWatchdog();
+    fn();
+  };
+
+  resetWatchdog();
+
+  fetch(url, { ...init, signal: controller.signal })
     .then(async (res) => {
       if (!res.ok) {
-        onError(`HTTP ${res.status}: ${res.statusText}`);
+        finishOnce(() => onError(`HTTP ${res.status}: ${res.statusText}`));
         return;
       }
       const reader = res.body?.getReader();
-      if (!reader) return;
+      if (!reader) {
+        finishOnce(() => onError("No response body"));
+        return;
+      }
 
       const decoder = new TextDecoder();
       let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
+        if (settled) return;
         if (done) break;
+        resetWatchdog();
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
@@ -71,16 +104,41 @@ export function streamQuery(
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const raw = line.slice(6).trim();
-            if (raw === "[DONE]") { onDone(); return; }
+            if (raw === "[DONE]") { finishOnce(onDone); return; }
             try { onEvent(JSON.parse(raw)); } catch { /* skip malformed */ }
           }
         }
       }
-      onDone();
+      finishOnce(onDone);
     })
-    .catch((err) => { if (err.name !== "AbortError") onError(err.message ?? "Stream error"); });
+    .catch((err) => {
+      if (err.name !== "AbortError") finishOnce(() => onError(err.message ?? "Stream error"));
+    });
 
-  return () => controller.abort();
+  return () => {
+    settled = true;
+    clearWatchdog();
+    controller.abort();
+  };
+}
+
+export function streamQuery(
+  payload: QueryPayload,
+  onEvent: (event: SSEEvent) => void,
+  onDone: () => void,
+  onError: (err: string) => void
+): () => void {
+  return streamSSE<SSEEvent>(
+    "/api/query",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    onEvent,
+    onDone,
+    onError
+  );
 }
 
 export async function fetchSchema(): Promise<SchemaResponse> {
@@ -123,34 +181,13 @@ export function streamEDA(
   onDone: () => void,
   onError: (err: string) => void
 ): () => void {
-  const controller = new AbortController();
-
-  fetch(`/api/eda/${encodeURIComponent(tableName)}`, { signal: controller.signal })
-    .then(async (res) => {
-      if (!res.ok) { onError(`HTTP ${res.status}: ${res.statusText}`); return; }
-      const reader = res.body?.getReader();
-      if (!reader) return;
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") { onDone(); return; }
-            try { onEvent(JSON.parse(raw)); } catch { /* skip malformed */ }
-          }
-        }
-      }
-      onDone();
-    })
-    .catch((err) => { if (err.name !== "AbortError") onError(err.message ?? "Stream error"); });
-
-  return () => controller.abort();
+  return streamSSE<EDAEvent>(
+    `/api/eda/${encodeURIComponent(tableName)}`,
+    {},
+    onEvent,
+    onDone,
+    onError
+  );
 }
 
 export interface ReportExchange {
