@@ -59,7 +59,12 @@ def _build_llm() -> ChatGroq:
     reraise=True,
 )
 def _call_llm(llm: ChatGroq, messages: list) -> str:
-    response = llm.invoke(messages)
+    # Without a stop sequence, llama-3.3-70b-versatile sometimes keeps
+    # generating past a complete "Action Input: {...}" block and hallucinates
+    # a fake Thought/Final Answer for an observation it hasn't actually seen
+    # yet — producing a confident-looking answer with no real data behind it.
+    # Cutting generation off at the next label prevents that runaway.
+    response = llm.invoke(messages, stop=["\nThought:", "\nObservation:"])
     return response.content
 
 
