@@ -296,7 +296,7 @@ export default function ChatInterface({ exampleQuestions = DEFAULT_EXAMPLES }: C
                     <p className="text-xs text-[var(--text-muted)] mt-0.5">Loading schema…</p>
                   )}
                 </div>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-400 border border-emerald-800/50">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                   Connected
                 </span>
               </div>
@@ -357,7 +357,7 @@ export default function ChatInterface({ exampleQuestions = DEFAULT_EXAMPLES }: C
                 {msg.thoughts.length > 0 && <ThoughtStream events={msg.thoughts} />}
 
                 {msg.error && (
-                  <div className="border border-red-800 bg-red-950 rounded-lg px-4 py-3 text-sm text-red-300">
+                  <div className="border border-red-200 bg-red-50 rounded-lg px-4 py-3 text-sm text-red-700">
                     <span className="font-semibold">Error:</span> {msg.error}
                   </div>
                 )}
@@ -384,8 +384,8 @@ export default function ChatInterface({ exampleQuestions = DEFAULT_EXAMPLES }: C
                         onClick={() => togglePin(msg.id)}
                         className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
                           msg.pinned
-                            ? "border-amber-600 text-amber-400 bg-amber-900/20"
-                            : "border-[var(--border)] text-[var(--text-muted)] hover:text-amber-400 hover:border-amber-600"
+                            ? "border-amber-300 text-amber-700 bg-amber-50"
+                            : "border-[var(--border)] text-[var(--text-muted)] hover:text-amber-700 hover:border-amber-300"
                         }`}
                         title={msg.pinned ? "Unpin insight" : "Pin as saved insight"}
                       >
@@ -460,7 +460,7 @@ export default function ChatInterface({ exampleQuestions = DEFAULT_EXAMPLES }: C
               {pinnedInsights.length > 0 && (
                 <button
                   onClick={() => setShowInsights(true)}
-                  className="relative text-[var(--text-muted)] hover:text-amber-400 text-sm px-3 py-3 rounded-xl border border-[var(--border)] hover:border-amber-600 transition-colors whitespace-nowrap"
+                  className="relative text-[var(--text-muted)] hover:text-amber-600 text-sm px-3 py-3 rounded-xl border border-[var(--border)] hover:border-amber-400 transition-colors whitespace-nowrap"
                 >
                   Insights
                   <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 text-white text-[10px] flex items-center justify-center font-bold">

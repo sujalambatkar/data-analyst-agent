@@ -21,7 +21,7 @@ export default function ChartRenderer({ chartJson, title }: ChartRendererProps) 
 
   if (!figure) {
     return (
-      <div className="border border-red-800 rounded-lg p-4 text-sm text-red-400">
+      <div className="border border-red-200 bg-red-50 rounded-lg p-4 text-sm text-red-700">
         Failed to parse chart data.
       </div>
     );
@@ -41,7 +41,7 @@ export default function ChartRenderer({ chartJson, title }: ChartRendererProps) 
             ...figure.layout,
             paper_bgcolor: "transparent",
             plot_bgcolor: "transparent",
-            font: { color: "#e2e8f0" },
+            font: { color: "#16181d" },
             margin: { t: 40, b: 60, l: 60, r: 20 },
           }}
           config={{ responsive: true, displayModeBar: false }}

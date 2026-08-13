@@ -90,7 +90,7 @@ export default function ReportModal({ exchanges, onClose }: ReportModalProps) {
             </div>
           )}
           {error && (
-            <div className="text-sm text-red-400 border border-red-800 bg-red-950 rounded-lg px-4 py-3">
+            <div className="text-sm text-red-700 border border-red-200 bg-red-50 rounded-lg px-4 py-3">
               {error}
             </div>
           )}

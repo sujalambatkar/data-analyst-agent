@@ -40,9 +40,9 @@ export default function SavedInsights({ insights, onClose, onUnpin, onAsk }: Sav
             </p>
           )}
           {insights.map((ins) => (
-            <div key={ins.id} className="border border-amber-800/40 bg-amber-900/10 rounded-xl p-4">
+            <div key={ins.id} className="border border-amber-200 bg-amber-50 rounded-xl p-4">
               <div className="flex items-start justify-between gap-3">
-                <p className="text-xs font-semibold text-amber-400 flex-1">{ins.question}</p>
+                <p className="text-xs font-semibold text-amber-800 flex-1">{ins.question}</p>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
                     onClick={() => onAsk(ins.question)}
@@ -52,7 +52,7 @@ export default function SavedInsights({ insights, onClose, onUnpin, onAsk }: Sav
                   </button>
                   <button
                     onClick={() => onUnpin(ins.id)}
-                    className="text-xs px-2.5 py-1 rounded-lg border border-amber-800/40 text-amber-500/70 hover:text-red-400 hover:border-red-800 transition-colors"
+                    className="text-xs px-2.5 py-1 rounded-lg border border-amber-200 text-amber-700/80 hover:text-red-700 hover:border-red-300 transition-colors"
                   >
                     Unpin
                   </button>

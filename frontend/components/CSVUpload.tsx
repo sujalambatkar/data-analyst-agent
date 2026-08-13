@@ -127,18 +127,18 @@ export default function CSVUpload() {
         <div
           className={`rounded-xl border px-4 py-3 text-xs ${
             result.success
-              ? "border-green-800 bg-green-950 text-green-300"
-              : "border-red-800 bg-red-950 text-red-300"
+              ? "border-green-200 bg-green-50 text-green-700"
+              : "border-red-200 bg-red-50 text-red-700"
           }`}
         >
           {result.success ? (
             <div className="space-y-1">
               <p className="font-semibold">Table created: {result.table_name}</p>
               <p>{result.rows?.toLocaleString()} rows imported</p>
-              <p className="text-green-400/70 font-mono truncate">
+              <p className="text-green-700/80 font-mono truncate">
                 {result.columns?.join(", ")}
               </p>
-              <p className="text-green-400/50 mt-1">
+              <p className="text-green-700/60 mt-1">
                 Switch to the Tables tab to explore it, or ask the agent a question.
               </p>
             </div>
