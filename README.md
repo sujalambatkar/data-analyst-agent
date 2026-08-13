@@ -2,7 +2,7 @@
 
 An autonomous AI agent that answers natural-language questions about your PostgreSQL database. It writes and executes SQL, detects anomalies, forecasts trends, generates interactive charts, and exports professional reports — all streamed live to a chat interface.
 
-Built with **LangGraph** · **FastAPI** · **Groq / Llama 4 Scout** · **Next.js 15** · **Plotly** · **Docker**
+Built with **LangGraph** · **FastAPI** · **Groq / Llama 3.3 70B** · **Next.js 15** · **Plotly** · **Docker**
 
 ---
 
@@ -101,7 +101,7 @@ FastAPI backend
 LangGraph ReAct graph
   ┌─────────────┐
   │  reason_node │◄──────────────┐
-  │  (Llama 4)  │               │
+  │  (Llama 3.3)  │               │
   └──────┬──────┘               │
          │ should_continue?     │
   ┌──────▼──────┐               │
@@ -227,7 +227,7 @@ The agent reads your schema automatically on the first query — no additional c
 
 | Layer | Technology |
 |---|---|
-| LLM | Llama 4 Scout 17B via Groq API |
+| LLM | Llama 3.3 70B via Groq API |
 | Agent framework | LangGraph (ReAct graph) |
 | Backend | FastAPI + Python 3.11 |
 | Charts | Plotly (returned as JSON, rendered by react-plotly.js) |

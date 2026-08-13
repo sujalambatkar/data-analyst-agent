@@ -47,7 +47,7 @@ export default function Home() {
             </div>
             <div>
               <h1 className="font-bold text-[var(--text)] leading-tight text-sm">Data Analyst Agent</h1>
-              <p className="text-xs text-[var(--text-muted)]">LangGraph · Groq · Llama 4 Scout</p>
+              <p className="text-xs text-[var(--text-muted)]">LangGraph · Groq · Llama 3.3 70B</p>
             </div>
           </div>
           <p className="text-xs text-[var(--text-muted)] leading-relaxed">
@@ -148,7 +148,7 @@ export default function Home() {
                   Tech stack
                 </h2>
                 <div className="flex flex-wrap gap-1.5">
-                  {["LangGraph", "FastAPI", "Groq", "Llama 4 Scout", "PostgreSQL", "Redis", "Next.js 15", "Plotly", "Docker"].map((t) => (
+                  {["LangGraph", "FastAPI", "Groq", "Llama 3.3 70B", "PostgreSQL", "Redis", "Next.js 15", "Plotly", "Docker"].map((t) => (
                     <span key={t} className="text-xs px-2 py-1 rounded-md bg-[var(--surface-2)] text-[var(--text-muted)] border border-[var(--border)]">
                       {t}
                     </span>
@@ -171,7 +171,7 @@ export default function Home() {
           </div>
           <div>
             <h1 className="text-sm font-semibold">Data Analyst Agent</h1>
-            <p className="text-xs text-[var(--text-muted)]">LangGraph · Groq · Llama 4 Scout</p>
+            <p className="text-xs text-[var(--text-muted)]">LangGraph · Groq · Llama 3.3 70B</p>
           </div>
         </header>
         <div className="flex-1 overflow-hidden min-h-0">
