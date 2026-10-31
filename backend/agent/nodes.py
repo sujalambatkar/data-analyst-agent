@@ -5,9 +5,9 @@ import re
 from typing import Any
 
 import groq as groq_sdk
-from langchain_groq import ChatGroq
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from .llm import invoke_llm
 from .state import AgentState
 from .tools import create_chart, detect_anomalies, forecast_trend, get_schema, profile_table, query_sql, run_python
 
@@ -44,28 +44,19 @@ Schema:
 """
 
 
-def _build_llm() -> ChatGroq:
-    return ChatGroq(
-        model="llama-3.3-70b-versatile",
-        api_key=os.getenv("GROQ_API_KEY", ""),
-        temperature=0,
-    )
-
-
 @retry(
     retry=retry_if_exception_type((groq_sdk.RateLimitError, groq_sdk.APIConnectionError)),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=2, min=5, max=60),
     reraise=True,
 )
-def _call_llm(llm: ChatGroq, messages: list) -> str:
+def _call_llm(messages: list) -> str:
     # Without a stop sequence, llama-3.3-70b-versatile sometimes keeps
     # generating past a complete "Action Input: {...}" block and hallucinates
     # a fake Thought/Final Answer for an observation it hasn't actually seen
     # yet — producing a confident-looking answer with no real data behind it.
     # Cutting generation off at the next label prevents that runaway.
-    response = llm.invoke(messages, stop=["\nThought:", "\nObservation:"])
-    return response.content
+    return invoke_llm(messages, temperature=0, stop=["\nThought:", "\nObservation:"])
 
 
 def _extract_json(text: str, marker: str) -> dict | list | None:
@@ -205,7 +196,6 @@ def _auto_chart_from_rows(question: str, rows: list) -> dict | None:
 
 
 def reason_node(state: AgentState) -> AgentState:
-    llm = _build_llm()
     system_content = SYSTEM_PROMPT.format(schema_info=state.get("schema_info", "Not loaded yet"))
 
     history: list[dict] = [{"role": "system", "content": system_content}]
@@ -218,7 +208,7 @@ def reason_node(state: AgentState) -> AgentState:
     for msg in prior[-4:]:
         history.append({"role": msg["role"], "content": msg["content"]})
 
-    raw = _call_llm(llm, history)
+    raw = _call_llm(history)
     logger.info("LLM raw response:\n%s", raw)
     parsed = _parse_llm_response(raw)
 

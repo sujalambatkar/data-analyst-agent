@@ -13,9 +13,9 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
-from langchain_groq import ChatGroq
 
 from backend.agent.graph import build_graph
+from backend.agent.llm import invoke_llm
 from backend.agent.state import AgentState
 from backend.agent.tools import create_chart, get_schema, profile_table, query_sql
 from backend.db.postgres import get_engine
@@ -47,11 +47,7 @@ def _sse(event_type: str, payload: dict) -> str:
 def _generate_followups(question: str, answer: str, schema_info: str) -> list[str]:
     """Ask the LLM for 3 concise follow-up questions given the current Q&A."""
     try:
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=os.getenv("GROQ_API_KEY", ""),
-            temperature=0.3,
-        )
+        temperature = 0.3
         prompt = (
             f"A data analyst asked: \"{question}\"\n"
             f"The answer was: \"{answer[:400]}\"\n\n"
@@ -60,7 +56,7 @@ def _generate_followups(question: str, answer: str, schema_info: str) -> list[st
             "Return ONLY a JSON array of 3 strings, nothing else. Example: "
             "[\"Question 1?\", \"Question 2?\", \"Question 3?\"]"
         )
-        raw = llm.invoke([{"role": "user", "content": prompt}]).content.strip()
+        raw = invoke_llm([{"role": "user", "content": prompt}], temperature=temperature)
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start != -1 and end > start:
@@ -201,8 +197,10 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
         exc_str = str(exc)
         if "RetryError" in exc_str or "RateLimitError" in exc_str:
             msg = "Groq rate limit reached after retries. Please wait 30–60 seconds and try again."
+        elif isinstance(exc, (groq_sdk.NotFoundError, groq_sdk.BadRequestError)) or "No usable Groq" in exc_str:
+            msg = "The AI model is currently unavailable (Groq model change). Set GROQ_MODEL on the backend."
         else:
-            msg = "An unexpected error occurred. Please try again."
+            msg = f"An unexpected error occurred ({type(exc).__name__}). Please try again."
         yield _sse("error", {"message": msg})
         yield "data: [DONE]\n\n"
 
@@ -210,11 +208,7 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
 def _generate_eda_summary(table_name: str, profile: dict) -> str:
     """Ask the LLM to write a plain-English summary of the table profile."""
     try:
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=os.getenv("GROQ_API_KEY", ""),
-            temperature=0.2,
-        )
+        temperature = 0.2
         col_lines = []
         for col in profile.get("columns", []):
             line = f"- {col['column']} ({col['type']}): {col['distinct_count']} distinct, {col['null_pct']}% null"
@@ -231,7 +225,7 @@ def _generate_eda_summary(table_name: str, profile: dict) -> str:
             f"Total rows: {profile.get('row_count', 'unknown')}\n"
             f"Columns:\n" + "\n".join(col_lines)
         )
-        return llm.invoke([{"role": "user", "content": prompt}]).content.strip()
+        return invoke_llm([{"role": "user", "content": prompt}], temperature=temperature)
     except Exception as e:
         logger.warning("EDA summary failed: %s", e)
         return ""
@@ -364,16 +358,21 @@ async def table_preview(table_name: str) -> dict:
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str) -> SessionResponse:
-    redis = get_redis_client()
-    raw = redis.get(f"session:{session_id}:history")
+    try:
+        raw = get_redis_client().get(f"session:{session_id}:history")
+    except Exception as e:
+        logger.warning("Redis session read failed: %s", e)
+        raw = None
     messages: list = json.loads(raw) if raw else []
     return SessionResponse(session_id=session_id, message_count=len(messages))
 
 
 @router.delete("/sessions/{session_id}")
 async def clear_session(session_id: str) -> dict:
-    redis = get_redis_client()
-    redis.delete(f"session:{session_id}:history")
+    try:
+        get_redis_client().delete(f"session:{session_id}:history")
+    except Exception as e:
+        logger.warning("Redis session delete failed: %s", e)
     return {"cleared": True, "session_id": session_id}
 
 
@@ -394,7 +393,6 @@ async def generate_report(request: Request, payload: dict) -> dict:
                 conv_lines.append(f"SQL: {ex['sql'][0][:200]}")
             conv_lines.append("")
 
-        llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY", ""), temperature=0.3)
         prompt = (
             "You are a senior data analyst writing a business report. "
             "Based on the analysis conversation below, produce a professional Markdown report.\n\n"
@@ -408,7 +406,7 @@ async def generate_report(request: Request, payload: dict) -> dict:
             f"Conversation:\n{''.join(conv_lines)[:2500]}\n\n"
             "Return ONLY the Markdown. No preamble."
         )
-        report_md = llm.invoke([{"role": "user", "content": prompt}]).content.strip()
+        report_md = invoke_llm([{"role": "user", "content": prompt}], temperature=0.3)
         return {"success": True, "report": report_md}
     except Exception:
         logger.exception("Report generation error")
