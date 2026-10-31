@@ -135,7 +135,9 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
                     None,
                 )
                 if last_obs:
-                    yield _sse("observation", {"content": last_obs["content"]})
+                    # `display` is the clean observation; `content` is the LLM-facing
+                    # text, which includes internal instructions.
+                    yield _sse("observation", {"content": last_obs.get("display", last_obs["content"])})
 
                 # Charts (auto-generated from query rows, forecasts, explicit
                 # create_chart) all live in state["charts"] — stream new ones.
@@ -149,7 +151,9 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
         # response — only the next turn loses conversation continuity.
         all_messages = final_state.get("messages", [])
         try:
-            redis.setex(history_key, 3600 * 24, json.dumps(all_messages, default=str))
+            # `display` can hold up to 500 rows per observation and is UI-only.
+            persisted = [{k: v for k, v in m.items() if k != "display"} for m in all_messages]
+            redis.setex(history_key, 3600 * 24, json.dumps(persisted, default=str))
         except Exception as e:
             logger.warning("Redis history write failed for session %s: %s", request.session_id, e)
 

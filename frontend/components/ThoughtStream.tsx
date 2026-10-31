@@ -23,6 +23,64 @@ function ToolBadge({ tool }: { tool: string }) {
   );
 }
 
+const PREVIEW_ROWS = 10;
+
+function formatCell(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return String(v);
+}
+
+function ObservationView({ content }: { content: string }) {
+  let obs: { success?: boolean; error?: string; rows?: Record<string, unknown>[]; columns?: string[]; row_count?: number } | null = null;
+  try {
+    obs = JSON.parse(content.replace(/^Observation:\s*/, ""));
+  } catch { /* fall through to raw text */ }
+
+  if (obs && obs.success === false) {
+    return <p className="text-xs text-red-600 mt-1">{obs.error ?? "Tool call failed"}</p>;
+  }
+
+  if (obs && Array.isArray(obs.rows) && obs.rows.length > 0) {
+    const columns = obs.columns ?? Object.keys(obs.rows[0]);
+    const total = obs.row_count ?? obs.rows.length;
+    return (
+      <div className="mt-1">
+        <div className="overflow-x-auto rounded border border-[var(--border)]">
+          <table className="text-xs w-full">
+            <thead className="bg-[var(--surface-2)] text-[var(--text-muted)]">
+              <tr>
+                {columns.map((c) => (
+                  <th key={c} className="text-left font-medium px-2 py-1 whitespace-nowrap">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {obs.rows.slice(0, PREVIEW_ROWS).map((row, r) => (
+                <tr key={r} className="border-t border-[var(--border)]">
+                  {columns.map((c) => (
+                    <td key={c} className="px-2 py-1 whitespace-nowrap text-[var(--text)]">{formatCell(row[c])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-[var(--text-muted)] mt-1">
+          {total} row{total === 1 ? "" : "s"} total
+          {total > PREVIEW_ROWS ? ` · showing first ${PREVIEW_ROWS}` : ""}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <pre className="text-xs bg-[var(--surface-2)] rounded p-2 mt-1 overflow-x-auto text-[var(--text-muted)] whitespace-pre-wrap break-all">
+      {obs ? JSON.stringify(obs, null, 2) : content}
+    </pre>
+  );
+}
+
 export default function ThoughtStream({ events }: ThoughtStreamProps) {
   const [collapsed, setCollapsed] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -75,9 +133,7 @@ export default function ThoughtStream({ events }: ThoughtStreamProps) {
               return (
                 <div key={i} className="text-sm pl-2 border-l-2 border-green-300">
                   <span className="text-xs font-semibold text-green-600">Observation</span>
-                  <pre className="text-xs bg-[var(--surface-2)] rounded p-2 mt-1 overflow-x-auto text-[var(--text-muted)] whitespace-pre-wrap break-all">
-                    {evt.content}
-                  </pre>
+                  <ObservationView content={evt.content ?? ""} />
                 </div>
               );
             }

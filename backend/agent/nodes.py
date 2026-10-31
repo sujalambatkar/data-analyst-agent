@@ -358,7 +358,13 @@ def tool_node(state: AgentState) -> AgentState:
             "Respond with `Final Answer:` containing the specific numbers from the rows above."
         )
 
-    messages.append({"role": "user", "content": obs_text})
+    # `display` is the clean observation the UI shows. It carries every row (the
+    # LLM's copy above is truncated) and never includes the nudge text.
+    messages.append({
+        "role": "user",
+        "content": obs_text,
+        "display": json.dumps(observation, default=str),
+    })
 
     new_state = dict(state)
     new_state["messages"] = messages
