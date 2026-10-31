@@ -9,9 +9,13 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from .llm import invoke_llm
 from .state import AgentState
+from .summary import summarize_rows
 from .tools import create_chart, detect_anomalies, forecast_trend, get_schema, profile_table, query_sql, run_python
 
 logger = logging.getLogger(__name__)
+
+_FULL_ROWS_MAX = 8  # results up to this size reach the LLM untouched
+_SAMPLE_ROWS = 5  # larger results are cut to this many rows plus a summary
 
 SYSTEM_PROMPT = """You are a data analyst agent with PostgreSQL access. Answer in at most 2 steps.
 
@@ -28,7 +32,8 @@ RULES:
 3. Always alias aggregates: SUM(x) AS x, COUNT(*) AS count, AVG(x) AS avg_x.
 4. SELECT only — never INSERT/UPDATE/DELETE/DROP.
 5. After seeing query results, immediately call final_answer with the complete answer. Never run a second query to "improve" or "add detail" — one query is enough.
-6. When the user asks for a chart/graph/plot/bar/line/pie/trend, your query MUST return a label column AND a numeric column so it can be plotted — always GROUP BY a category or time period (e.g. SELECT region, SUM(revenue) AS revenue FROM sales GROUP BY region). Never return a single aggregate value for a chart request.
+6. When the result is truncated ("truncated": true), the rows are only a sample. Base your Final Answer on the "summary" (it covers ALL rows: min/max with their labels, mean, total, first/last, pct_change, by_year) — never describe only the sample rows as if they were the whole result.
+7. When the user asks for a chart/graph/plot/bar/line/pie/trend, your query MUST return a label column AND a numeric column so it can be plotted — always GROUP BY a category or time period (e.g. SELECT region, SUM(revenue) AS revenue FROM sales GROUP BY region). Never return a single aggregate value for a chart request.
 
 FORMAT every turn:
 Thought: <one sentence>
@@ -339,12 +344,18 @@ def tool_node(state: AgentState) -> AgentState:
         new_state["final_answer"] = action_input.get("answer", "")
         return new_state  # type: ignore[return-value]
 
-    # Truncate rows in the observation stored in messages to stay within token limits.
-    # The full rows are still available in `observation` for create_chart auto-inject above.
+    # Long results are cut down to a small sample for the LLM's token budget, but a
+    # sample alone makes the written answer describe only the first few rows. Attach
+    # whole-result statistics so the answer can cover all of them. The full rows are
+    # still available in `observation` for charts and the UI.
     obs_for_msg = dict(observation)
-    if isinstance(obs_for_msg.get("rows"), list) and len(obs_for_msg["rows"]) > 8:
-        obs_for_msg["rows"] = obs_for_msg["rows"][:8]
+    truncated = isinstance(obs_for_msg.get("rows"), list) and len(obs_for_msg["rows"]) > _FULL_ROWS_MAX
+    if truncated:
+        summary = summarize_rows(obs_for_msg["rows"])
+        obs_for_msg["rows"] = obs_for_msg["rows"][:_SAMPLE_ROWS]
         obs_for_msg["truncated"] = True
+        if summary["measures"]:
+            obs_for_msg["summary"] = summary
 
     obs_text = f"Observation: {json.dumps(obs_for_msg, default=str)}"
 
@@ -355,7 +366,12 @@ def tool_node(state: AgentState) -> AgentState:
     if action == "query_sql" and observation.get("success") and observation.get("rows"):
         obs_text += (
             "\n\nYou now have the data needed. Do NOT run another query. "
-            "Respond with `Final Answer:` containing the specific numbers from the rows above."
+            + (
+                "The rows shown are only a sample; the `summary` covers ALL rows. "
+                "Respond with `Final Answer:` based on the summary (peaks, lows, totals, trend across the whole range)."
+                if truncated and "summary" in obs_for_msg
+                else "Respond with `Final Answer:` containing the specific numbers from the rows above."
+            )
         )
 
     # `display` is the clean observation the UI shows. It carries every row (the
