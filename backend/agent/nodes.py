@@ -148,7 +148,10 @@ def _parse_llm_response(text: str) -> dict[str, Any]:
 
     final_match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
     if final_match:
-        result["final_answer"] = final_match.group(1).strip()
+        # The model sometimes echoes a redundant "Action: final_answer / Action Input"
+        # block after its answer; that is not part of the answer text.
+        answer = re.split(r"\n\s*Action(?: Input)?:", final_match.group(1))[0]
+        result["final_answer"] = answer.strip()
         return result
 
     action_match = re.search(r"Action:\s*(\w+)", text)
