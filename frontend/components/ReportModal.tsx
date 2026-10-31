@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "./Markdown";
 import { useEffect, useState } from "react";
 import { generateReport, ReportExchange } from "@/lib/api";
 
@@ -95,9 +96,9 @@ export default function ReportModal({ exchanges, onClose }: ReportModalProps) {
             </div>
           )}
           {report && (
-            <pre className="text-sm text-[var(--text)] whitespace-pre-wrap font-mono leading-relaxed">
-              {report}
-            </pre>
+            <div className="text-sm text-[var(--text)] leading-relaxed">
+              <Markdown>{report}</Markdown>
+            </div>
           )}
         </div>
       </div>

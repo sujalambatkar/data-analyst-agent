@@ -1,5 +1,6 @@
 "use client";
 
+import Markdown from "./Markdown";
 import { useRef, useState, useCallback, useEffect } from "react";
 import { SSEEvent, streamQuery, clearSession, fetchSuggestions, fetchSchema, ReportExchange } from "@/lib/api";
 import ThoughtStream from "./ThoughtStream";
@@ -363,8 +364,8 @@ export default function ChatInterface({ exampleQuestions = DEFAULT_EXAMPLES }: C
                 )}
 
                 {msg.text && (
-                  <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl rounded-tl-sm px-5 py-4 text-sm text-[var(--text)] leading-relaxed whitespace-pre-wrap">
-                    {msg.text}
+                  <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl rounded-tl-sm px-5 py-4 text-sm text-[var(--text)] leading-relaxed">
+                    <Markdown>{msg.text}</Markdown>
                   </div>
                 )}
 

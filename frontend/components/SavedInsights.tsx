@@ -1,5 +1,7 @@
 "use client";
 
+import Markdown from "./Markdown";
+
 interface Insight {
   id: string;
   question: string;
@@ -58,7 +60,9 @@ export default function SavedInsights({ insights, onClose, onUnpin, onAsk }: Sav
                   </button>
                 </div>
               </div>
-              <p className="text-sm text-[var(--text)] mt-2 leading-relaxed line-clamp-4">{ins.answer}</p>
+              <div className="text-sm text-[var(--text)] mt-2 leading-relaxed line-clamp-4">
+                <Markdown>{ins.answer}</Markdown>
+              </div>
             </div>
           ))}
         </div>
