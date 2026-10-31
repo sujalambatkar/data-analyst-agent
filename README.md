@@ -1,6 +1,6 @@
 # Data Analyst Agent
 
-An autonomous AI agent that answers natural-language questions about your PostgreSQL database. It writes and executes SQL, detects anomalies, forecasts trends, generates interactive charts, and exports professional reports — all streamed live to a chat interface.
+An autonomous AI agent that answers natural-language questions about your PostgreSQL database. It writes and executes SQL, detects anomalies, forecasts trends, and generates interactive charts — all in a simple chat interface.
 
 Built with **LangGraph** · **FastAPI** · **Groq (auto-selected model)** · **Next.js 15** · **Plotly** · **Docker**
 
@@ -14,10 +14,7 @@ Built with **LangGraph** · **FastAPI** · **Groq (auto-selected model)** · **N
 | **Live chart generation** | Auto-creates bar, line, scatter, and pie charts from SQL results via Plotly |
 | **Anomaly detection** | IQR-based statistical outlier detection across any numeric column |
 | **Trend forecasting** | Linear regression projections — "forecast next 6 months of revenue" |
-| **EDA panel** | One-click table profiling: null %, distinct counts, min/max/avg, distribution charts, and an AI-written summary |
 | **CSV upload** | Upload your own CSV files — they become queryable tables immediately |
-| **Report generation** | Export a full Markdown business report with findings, SQL, and recommendations |
-| **Pin & save insights** | Pin important answers to a persistent Saved Insights panel |
 | **CSV export** | Export any query result to a CSV file in one click |
 | **Session memory** | Conversation history stored in Redis — ask follow-ups without repeating context |
 | **Read-only safety** | SELECT-only guard at the engine level — INSERT, UPDATE, DELETE, DROP are rejected |
@@ -146,15 +143,13 @@ data-analyst-agent/
 │   └── Dockerfile
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx          # Two-panel layout (sidebar + chat)
+│   │   ├── page.tsx          # Renders the chat
 │   │   └── layout.tsx        # Root layout, global CSS
 │   ├── components/
-│   │   ├── ChatInterface.tsx # Main chat, SSE consumer, chart renderer
-│   │   ├── SchemaExplorer.tsx# Table browser with row counts
-│   │   ├── EDAPanel.tsx      # Streaming EDA modal
-│   │   ├── CSVUpload.tsx     # Drag-and-drop CSV uploader
-│   │   ├── SavedInsights.tsx # Pinned answers panel
-│   │   └── ReportModal.tsx   # Markdown report generator
+│   │   ├── ChatInterface.tsx # Header, chat, SSE consumer, charts
+│   │   ├── ResultTable.tsx   # Query result table
+│   │   ├── DataPanel.tsx     # "Your data" drawer: tables + CSV upload
+│   │   └── Markdown.tsx      # Markdown renderer for answers
 │   ├── lib/
 │   │   └── api.ts            # Typed fetch helpers for all endpoints
 │   └── Dockerfile
