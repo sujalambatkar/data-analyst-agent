@@ -141,8 +141,9 @@ export function streamQuery(
   );
 }
 
-export async function fetchSchema(): Promise<SchemaResponse> {
-  const res = await fetch("/api/schema");
+export async function fetchSchema(timeoutMs = 25000): Promise<SchemaResponse> {
+  const res = await fetch("/api/schema", { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`Schema request failed (${res.status})`);
   return res.json();
 }
 

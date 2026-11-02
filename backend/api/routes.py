@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import AsyncGenerator
 
 import groq as groq_sdk
@@ -328,9 +329,23 @@ async def query_endpoint(request: Request, body: QueryRequest) -> StreamingRespo
     )
 
 
+_SCHEMA_TTL_SECONDS = 60
+_schema_cache: tuple[float, dict] | None = None
+
+
 @router.get("/schema")
 async def schema_endpoint() -> dict:
-    """Return all tables with column info and row counts."""
+    """Return all tables with column info and row counts (cached briefly: reflecting every table is slow)."""
+    global _schema_cache
+    if _schema_cache and time.monotonic() - _schema_cache[0] < _SCHEMA_TTL_SECONDS:
+        return _schema_cache[1]
+    result = _build_schema_payload()
+    if result.get("success"):
+        _schema_cache = (time.monotonic(), result)
+    return result
+
+
+def _build_schema_payload() -> dict:
     engine = get_engine()
     schema = get_schema(engine)
     if not schema.get("success"):
@@ -460,6 +475,8 @@ async def upload_csv(file: UploadFile = File(...), if_exists: str = "replace") -
 
         engine = get_engine()
         df.to_sql(table_name, engine, if_exists=if_exists, index=False)
+        global _schema_cache
+        _schema_cache = None
 
         return {
             "success": True,

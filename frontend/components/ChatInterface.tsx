@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import { SSEEvent, streamQuery, clearSession, fetchSchema } from "@/lib/api";
+import { SSEEvent, streamQuery, clearSession, fetchSchema, SchemaResponse } from "@/lib/api";
 import Markdown from "./Markdown";
 import ChartRenderer from "./ChartRenderer";
 import ResultTable from "./ResultTable";
@@ -41,7 +41,8 @@ export default function ChatInterface() {
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [showData, setShowData] = useState(false);
-  const [tableCount, setTableCount] = useState<number | null>(null);
+  const [schema, setSchema] = useState<SchemaResponse | null>(null);
+  const [schemaError, setSchemaError] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -50,11 +51,25 @@ export default function ChatInterface() {
     setSessionId(`session_${Math.random().toString(36).slice(2, 9)}`);
   }, []);
 
-  useEffect(() => {
-    fetchSchema()
-      .then((res) => { if (res.success) setTableCount(Object.keys(res.tables).length); })
-      .catch(() => {});
+  // Loaded once up front and shared with the "Your data" drawer, so opening it is
+  // instant. One automatic retry covers the backend waking from a cold start.
+  const loadSchema = useCallback(async () => {
+    setSchemaError(false);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetchSchema();
+        if (res.success) {
+          setSchema(res);
+          return;
+        }
+      } catch { /* retry once, then show the error state */ }
+    }
+    setSchemaError(true);
   }, []);
+
+  useEffect(() => {
+    loadSchema();
+  }, [loadSchema]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -145,7 +160,15 @@ export default function ChatInterface() {
 
   return (
     <div className="flex flex-col h-screen">
-      {showData && <DataPanel onClose={() => setShowData(false)} onAsk={askFromPanel} />}
+      {showData && (
+        <DataPanel
+          schema={schema}
+          error={schemaError}
+          onReload={loadSchema}
+          onClose={() => setShowData(false)}
+          onAsk={askFromPanel}
+        />
+      )}
 
       <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-[var(--border)] flex-shrink-0">
         <div className="flex items-center gap-2.5">
@@ -177,7 +200,7 @@ export default function ChatInterface() {
               <h2 className="text-2xl font-semibold mb-2">What would you like to know?</h2>
               <p className="text-sm text-[var(--text-muted)] mb-8">
                 Ask a question about your data in plain English.
-                {tableCount !== null && ` Connected to ${tableCount} table${tableCount === 1 ? "" : "s"}.`}
+                {schema && ` Connected to ${Object.keys(schema.tables).length} table${Object.keys(schema.tables).length === 1 ? "" : "s"}.`}
               </p>
               <div className="grid gap-2 sm:grid-cols-2 text-left">
                 {EXAMPLES.map((q) => (

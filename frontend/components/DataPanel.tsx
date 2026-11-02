@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fetchSchema, SchemaResponse } from "@/lib/api";
+import { SchemaResponse } from "@/lib/api";
 
 interface DataPanelProps {
+  schema: SchemaResponse | null;
+  error: boolean;
+  onReload: () => void;
   onClose: () => void;
   onAsk: (question: string) => void;
 }
@@ -15,15 +18,19 @@ interface UploadResult {
   error?: string;
 }
 
-export default function DataPanel({ onClose, onAsk }: DataPanelProps) {
-  const [schema, setSchema] = useState<SchemaResponse | null>(null);
+export default function DataPanel({ schema, error, onReload, onClose, onAsk }: DataPanelProps) {
+  const [slow, setSlow] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const load = () => fetchSchema().then(setSchema).catch(() => setSchema({ success: false, tables: {} }));
-  useEffect(() => { load(); }, []);
+  // Free-tier hosting can take a while to wake up; say so instead of spinning silently.
+  useEffect(() => {
+    if (schema || error) return;
+    const t = setTimeout(() => setSlow(true), 5000);
+    return () => clearTimeout(t);
+  }, [schema, error]);
 
   const upload = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".csv")) {
@@ -38,7 +45,7 @@ export default function DataPanel({ onClose, onAsk }: DataPanelProps) {
       const res = await fetch("/api/upload/csv?if_exists=replace", { method: "POST", body: form });
       const data: UploadResult = await res.json();
       setResult(data);
-      if (data.success) load();
+      if (data.success) onReload();
     } catch {
       setResult({ success: false, error: "Upload failed. Please try again." });
     } finally {
@@ -46,7 +53,7 @@ export default function DataPanel({ onClose, onAsk }: DataPanelProps) {
     }
   };
 
-  const tables = schema?.success ? Object.entries(schema.tables) : [];
+  const tables = schema ? Object.entries(schema.tables) : [];
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
@@ -62,8 +69,23 @@ export default function DataPanel({ onClose, onAsk }: DataPanelProps) {
         <div className="p-5 space-y-6">
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-2">Tables</h3>
-            {!schema && <p className="text-sm text-[var(--text-muted)] animate-pulse">Loading…</p>}
-            {schema && tables.length === 0 && (
+            {!schema && !error && (
+              <p className="text-sm text-[var(--text-muted)] animate-pulse">
+                {slow ? "Still loading — the server may be waking up, this can take up to a minute…" : "Loading your tables…"}
+              </p>
+            )}
+            {error && (
+              <div className="text-sm text-red-700">
+                <p>Couldn’t load your tables.</p>
+                <button
+                  onClick={onReload}
+                  className="mt-2 text-xs px-3 py-1.5 rounded-lg border border-red-300 hover:bg-red-100"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {schema && !error && tables.length === 0 && (
               <p className="text-sm text-[var(--text-muted)]">No tables yet. Upload a CSV below to get started.</p>
             )}
             <div className="space-y-2">
