@@ -22,11 +22,14 @@ interface Message {
   error?: string;
 }
 
+// Written against the seeded sales data (products, customers, sales 2020-2024).
 const EXAMPLES = [
   "Which product had the highest revenue in 2024?",
-  "Show monthly revenue trends as a line chart.",
-  "Compare total revenue by region.",
-  "Which customer segment generates the most revenue?",
+  "How did total revenue change from 2020 to 2024?",
+  "Show monthly revenue for the Displays category as a line chart.",
+  "Which region brings in the most revenue from Enterprise customers?",
+  "Do Enterprise customers buy more Online or In-Store?",
+  "What are the top 5 best-selling products by units sold?",
 ];
 
 const STATUS_BY_EVENT: Record<string, string> = {

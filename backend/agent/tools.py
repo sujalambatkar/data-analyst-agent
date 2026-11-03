@@ -62,8 +62,53 @@ def query_sql(query: str, engine: Engine) -> dict:
         return {"success": False, "error": str(e)}
 
 
+_COLUMNS_SQL = text("""
+    SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+    ORDER BY c.relname, a.attnum
+""")
+
+_FKS_SQL = text("""
+    SELECT rel.relname, frel.relname,
+           ARRAY(SELECT attname FROM pg_attribute WHERE attrelid = con.conrelid AND attnum = ANY(con.conkey)),
+           ARRAY(SELECT attname FROM pg_attribute WHERE attrelid = con.confrelid AND attnum = ANY(con.confkey))
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_class frel ON frel.oid = con.confrelid
+    JOIN pg_namespace n ON n.oid = rel.relnamespace
+    WHERE con.contype = 'f' AND n.nspname = 'public'
+""")
+
+
+def _pg_type_name(raw: str) -> str:
+    return raw.upper().replace("CHARACTER VARYING", "VARCHAR").replace("TIMESTAMP WITHOUT TIME ZONE", "TIMESTAMP")
+
+
+def _get_schema_fast(engine: Engine) -> dict:
+    """Two catalog queries instead of per-table reflection (~5 round trips per table)."""
+    tables: dict[str, Any] = {}
+    with engine.connect() as conn:
+        for table, col, col_type, nullable in conn.execute(_COLUMNS_SQL):
+            tables.setdefault(table, {"columns": [], "foreign_keys": []})["columns"].append(
+                {"name": col, "type": _pg_type_name(col_type), "nullable": bool(nullable)}
+            )
+        for table, ref_table, cols, ref_cols in conn.execute(_FKS_SQL):
+            if table in tables:
+                tables[table]["foreign_keys"].append(
+                    {"constrained_columns": list(cols), "referred_table": ref_table, "referred_columns": list(ref_cols)}
+                )
+    return {"success": True, "tables": tables}
+
+
 def get_schema(engine: Engine) -> dict:
     """Return a structured dict of all tables, columns, types, and foreign keys."""
+    try:
+        return _get_schema_fast(engine)
+    except Exception:
+        pass  # non-Postgres or restricted catalog access: fall back to SQLAlchemy reflection
     try:
         inspector = inspect(engine)
         tables: dict[str, Any] = {}
