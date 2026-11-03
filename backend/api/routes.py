@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+from collections import OrderedDict
 from typing import AsyncGenerator
 
 import groq as groq_sdk
@@ -26,6 +27,18 @@ from .models import HealthResponse, QueryRequest, SessionResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Conversation memory used when Redis is unreachable (the API runs as a single
+# process on Render, so a bounded in-process copy keeps follow-ups working).
+_MEMORY_MAX_SESSIONS = 200
+_memory_history: "OrderedDict[str, str]" = OrderedDict()
+
+
+def _memory_put(key: str, value: str) -> None:
+    _memory_history[key] = value
+    _memory_history.move_to_end(key)
+    while len(_memory_history) > _MEMORY_MAX_SESSIONS:
+        _memory_history.popitem(last=False)
 
 _MAX_CSV_BYTES = 50 * 1024 * 1024  # 50 MB
 _ALLOWED_CSV_CONTENT_TYPES = {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"}
@@ -90,11 +103,13 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
         except Exception as e:
             logger.warning("Redis history read failed for session %s: %s", request.session_id, e)
             raw_history = None
+        if not raw_history:
+            raw_history = _memory_history.get(history_key)
         prior_messages: list = json.loads(raw_history) if raw_history else []
 
         initial_state: AgentState = {
             "question": request.question,
-            "messages": list(prior_messages),
+            "messages": list(prior_messages) + [{"role": "user", "content": request.question, "question": True}],
             "session_id": request.session_id,
             "datasource": request.datasource,
             "schema_info": schema_info,
@@ -154,7 +169,9 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
         try:
             # `display` can hold up to 500 rows per observation and is UI-only.
             persisted = [{k: v for k, v in m.items() if k != "display"} for m in all_messages]
-            redis.setex(history_key, 3600 * 24, json.dumps(persisted, default=str))
+            payload = json.dumps(persisted, default=str)
+            _memory_put(history_key, payload)
+            redis.setex(history_key, 3600 * 24, payload)
         except Exception as e:
             logger.warning("Redis history write failed for session %s: %s", request.session_id, e)
 
@@ -388,6 +405,7 @@ async def get_session(session_id: str) -> SessionResponse:
 
 @router.delete("/sessions/{session_id}")
 async def clear_session(session_id: str) -> dict:
+    _memory_history.pop(f"session:{session_id}:history", None)
     try:
         get_redis_client().delete(f"session:{session_id}:history")
     except Exception as e:

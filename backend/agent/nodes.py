@@ -22,6 +22,7 @@ SYSTEM_PROMPT = """You are a data analyst agent with PostgreSQL access. Answer i
 SCOPE: You ONLY help with the data in the schema below: analysis, charts, trends, forecasts, anomalies, questions about the tables/columns, and short greetings or "what can you do". For ANYTHING else — general knowledge, definitions, explanations of everyday things, advice, coding help, creative writing, news, trivia, math unrelated to the data — do NOT answer, even if you know the answer. Reply with exactly these two lines and nothing else:
 Thought: This is not about the data.
 Final Answer: [OFF_TOPIC]
+Follow-ups, corrections and feedback about the conversation so far are ON-topic: "i said pie chart", "make it a bar chart instead", "now by region", "why?", "thanks". Use the earlier messages to understand them and redo the analysis. Only if there is no earlier conversation and the message is unrelated to the data is it off-topic.
 Examples: "what is an apple" -> off-topic. "write a poem" -> off-topic. "who won the world cup" -> off-topic. "which product sold most" -> on-topic (query the data). "what tables do you have" -> on-topic (answer from the schema). "hi" -> on-topic (greet briefly and say what you can do).
 
 TOOLS (call one per turn):
@@ -32,6 +33,7 @@ TOOLS (call one per turn):
 - final_answer: {{"answer":"..."}}
 
 RULES:
+0. Run query_sql in EVERY turn that asks about the data — including follow-ups, corrections and chart-type changes ("make it a pie chart"). Never answer from results shown in earlier messages: charts are only drawn from a query run in the current turn.
 1. Schema is provided — do NOT call get_schema.
 2. Charts are generated automatically from query results — just run query_sql, then final_answer.
 3. Always alias aggregates: SUM(x) AS x, COUNT(*) AS count, AVG(x) AS avg_x.
@@ -210,7 +212,7 @@ def _auto_chart_from_rows(question: str, rows: list) -> dict | None:
         return None
 
     q = (question or "").lower()
-    if "pie" in q:
+    if re.search(r"\b(pie|pi|donut|doughnut)\b", q):
         ctype = "pie"
     elif "scatter" in q:
         ctype = "scatter"
@@ -230,14 +232,21 @@ def reason_node(state: AgentState) -> AgentState:
     system_content = SYSTEM_PROMPT.format(schema_info=state.get("schema_info", "Not loaded yet"))
 
     history: list[dict] = [{"role": "system", "content": system_content}]
-    history.append({"role": "user", "content": state["question"]})
 
-    prior = [
-        m for m in state.get("messages", [])
-        if m.get("role") in ("assistant", "user") and m.get("content")
-    ]
-    for msg in prior[-4:]:
-        history.append({"role": msg["role"], "content": msg["content"]})
+    # The current question is marked in `messages`. Show up to 4 earlier messages
+    # (previous turns) first, then the current question and everything this turn.
+    msgs = [m for m in state.get("messages", []) if m.get("role") in ("assistant", "user") and m.get("content")]
+    q_idx = next((i for i in range(len(msgs) - 1, -1, -1) if msgs[i].get("question")), None)
+    if q_idx is None:
+        msgs = msgs + [{"role": "user", "content": state["question"]}]
+        q_idx = len(msgs) - 1
+    start = max(0, q_idx - 4)
+    for i, msg in enumerate(msgs[start:], start=start):
+        content = msg["content"]
+        if i < q_idx:
+            # The "you have the data, don't query again" nudge only applies within its own turn.
+            content = content.split("\n\nYou now have the data needed")[0]
+        history.append({"role": msg["role"], "content": content})
 
     raw = _call_llm(history)
     logger.info("LLM raw response:\n%s", raw)
