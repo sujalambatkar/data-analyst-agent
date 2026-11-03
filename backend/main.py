@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 # Validate required env vars at startup — fail fast before any request is served
-_required = ["GROQ_API_KEY", "DATABASE_URL", "REDIS_URL"]
+_required = ["GROQ_API_KEY", "DATABASE_URL"]  # REDIS_URL is optional
 _missing = [k for k in _required if not os.getenv(k)]
 if _missing:
     print(f"[FATAL] Missing required environment variables: {', '.join(_missing)}", file=sys.stderr)

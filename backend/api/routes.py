@@ -28,17 +28,63 @@ from .models import HealthResponse, QueryRequest, SessionResponse
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Conversation memory used when Redis is unreachable (the API runs as a single
-# process on Render, so a bounded in-process copy keeps follow-ups working).
+# Conversation memory. Redis is optional: when it is not configured, or is
+# unreachable, history lives in a bounded in-process dict (the API runs as a
+# single process on Render, so this keeps follow-ups working; it resets when
+# the service restarts or sleeps).
 _MEMORY_MAX_SESSIONS = 200
+_REDIS_RETRY_SECONDS = 60
 _memory_history: "OrderedDict[str, str]" = OrderedDict()
+_redis_down_until = 0.0
 
 
-def _memory_put(key: str, value: str) -> None:
+def _redis():
+    """The Redis client, or None if unconfigured or recently failing."""
+    if time.monotonic() < _redis_down_until:
+        return None
+    return get_redis_client()
+
+
+def _redis_failed(action: str, exc: Exception) -> None:
+    global _redis_down_until
+    _redis_down_until = time.monotonic() + _REDIS_RETRY_SECONDS
+    logger.warning("Redis %s failed (%s); using in-memory history for %ss", action, exc, _REDIS_RETRY_SECONDS)
+
+
+def _history_get(key: str) -> str | None:
+    client = _redis()
+    if client is not None:
+        try:
+            value = client.get(key)
+            if value:
+                return value
+        except Exception as e:
+            _redis_failed("read", e)
+    return _memory_history.get(key)
+
+
+def _history_put(key: str, value: str) -> None:
     _memory_history[key] = value
     _memory_history.move_to_end(key)
     while len(_memory_history) > _MEMORY_MAX_SESSIONS:
         _memory_history.popitem(last=False)
+    client = _redis()
+    if client is not None:
+        try:
+            client.setex(key, 3600 * 24, value)
+        except Exception as e:
+            _redis_failed("write", e)
+
+
+def _history_delete(key: str) -> None:
+    _memory_history.pop(key, None)
+    client = _redis()
+    if client is not None:
+        try:
+            client.delete(key)
+        except Exception as e:
+            _redis_failed("delete", e)
+
 
 _MAX_CSV_BYTES = 50 * 1024 * 1024  # 50 MB
 _ALLOWED_CSV_CONTENT_TYPES = {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"}
@@ -83,8 +129,6 @@ def _generate_followups(question: str, answer: str, schema_info: str) -> list[st
 async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
     try:
         engine = get_engine()
-        redis = get_redis_client()
-
         schema_result = get_schema(engine)
         if schema_result.get("success"):
             lines = []
@@ -98,13 +142,7 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
             schema_info = "Schema unavailable"
 
         history_key = f"session:{request.session_id}:history"
-        try:
-            raw_history = redis.get(history_key)
-        except Exception as e:
-            logger.warning("Redis history read failed for session %s: %s", request.session_id, e)
-            raw_history = None
-        if not raw_history:
-            raw_history = _memory_history.get(history_key)
+        raw_history = _history_get(history_key)
         prior_messages: list = json.loads(raw_history) if raw_history else []
 
         initial_state: AgentState = {
@@ -163,17 +201,12 @@ async def _event_stream(request: QueryRequest) -> AsyncGenerator[str, None]:
                 charts_emitted = len(all_charts)
 
         # Persist conversation. The answer below is already fully computed and
-        # streamed by this point, so a Redis blip here must not abort the
-        # response — only the next turn loses conversation continuity.
+        # streamed by this point, so a storage problem here must not abort the
+        # response — only the next turn would lose conversation continuity.
         all_messages = final_state.get("messages", [])
-        try:
-            # `display` can hold up to 500 rows per observation and is UI-only.
-            persisted = [{k: v for k, v in m.items() if k != "display"} for m in all_messages]
-            payload = json.dumps(persisted, default=str)
-            _memory_put(history_key, payload)
-            redis.setex(history_key, 3600 * 24, payload)
-        except Exception as e:
-            logger.warning("Redis history write failed for session %s: %s", request.session_id, e)
+        # `display` can hold up to 500 rows per observation and is UI-only.
+        persisted = [{k: v for k, v in m.items() if k != "display"} for m in all_messages]
+        _history_put(history_key, json.dumps(persisted, default=str))
 
         final_answer = final_state.get("final_answer")
         if not final_answer:
@@ -394,22 +427,14 @@ async def table_preview(table_name: str) -> dict:
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str) -> SessionResponse:
-    try:
-        raw = get_redis_client().get(f"session:{session_id}:history")
-    except Exception as e:
-        logger.warning("Redis session read failed: %s", e)
-        raw = None
+    raw = _history_get(f"session:{session_id}:history")
     messages: list = json.loads(raw) if raw else []
     return SessionResponse(session_id=session_id, message_count=len(messages))
 
 
 @router.delete("/sessions/{session_id}")
 async def clear_session(session_id: str) -> dict:
-    _memory_history.pop(f"session:{session_id}:history", None)
-    try:
-        get_redis_client().delete(f"session:{session_id}:history")
-    except Exception as e:
-        logger.warning("Redis session delete failed: %s", e)
+    _history_delete(f"session:{session_id}:history")
     return {"cleared": True, "session_id": session_id}
 
 
@@ -510,7 +535,6 @@ async def upload_csv(file: UploadFile = File(...), if_exists: str = "replace") -
 @router.get("/health", response_model=HealthResponse)
 async def health_check(response: Response) -> HealthResponse:
     postgres_ok = False
-    redis_ok = False
     try:
         engine = get_engine()
         with engine.connect() as conn:
@@ -518,22 +542,21 @@ async def health_check(response: Response) -> HealthResponse:
         postgres_ok = True
     except Exception:
         pass
-    try:
-        get_redis_client().ping()
-        redis_ok = True
-    except Exception:
-        pass
 
-    # A non-200 here lets Render's own healthCheckPath detect a real outage
-    # and restart the service — previously this always returned 200 even
-    # when both dependencies were unreachable, so Render could never tell.
-    # This does not break the UptimeRobot keep-alive ping: Render's spin-down
-    # timer resets on any inbound request regardless of status code.
-    if not (postgres_ok and redis_ok):
+    # Redis is optional (history falls back to memory), so it is reported but
+    # never fails the check. Only a Postgres outage returns 503, which lets
+    # Render's healthCheckPath detect a real outage. This does not break the
+    # UptimeRobot keep-alive ping: any inbound request resets the spin-down timer.
+    redis_ok: bool | None = None
+    client = get_redis_client()
+    if client is not None:
+        try:
+            client.ping()
+            redis_ok = True
+        except Exception:
+            redis_ok = False
+
+    if not postgres_ok:
         response.status_code = 503
 
-    return HealthResponse(
-        status="ok" if postgres_ok and redis_ok else "degraded",
-        postgres=postgres_ok,
-        redis=redis_ok,
-    )
+    return HealthResponse(status="ok" if postgres_ok else "degraded", postgres=postgres_ok, redis=redis_ok)

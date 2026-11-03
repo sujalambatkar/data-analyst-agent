@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 # Groq retires models without much notice (llama-4-scout and llama-3.3-70b
 # were both removed from this account, taking every query down with a generic
-# "unexpected error"). Instead of hardcoding one id, pick the first model from
 # this list that Groq currently serves, and re-resolve if the chosen one
 # disappears mid-run. Set GROQ_MODEL to pin a specific model.
 _PREFERRED = [

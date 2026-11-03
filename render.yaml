@@ -20,8 +20,8 @@ services:
         fromDatabase:
           name: data-analyst-db
           property: connectionString
-      - key: REDIS_URL
-        sync: false            # use Upstash free Redis — set URL manually
+      # REDIS_URL is optional. Without it, conversation history is kept in memory
+      # (lost on restart/sleep). To persist it, add an Upstash Redis URL (rediss://...).
       - key: ALLOWED_ORIGINS
         sync: false            # set to your Vercel URL, e.g. https://your-app.vercel.app
       - key: LANGSMITH_TRACING
@@ -34,10 +34,9 @@ databases:
     plan: free               # 1 GB storage, 97 hours/month on free tier
 
 ## ── Notes ────────────────────────────────────────────────────────────────────
-## Redis: Render's free Redis is deprecated. Use Upstash (https://upstash.com)
-##   1. Create a free Redis database on Upstash
-##   2. Copy the Redis URL (rediss://... format)
-##   3. Set it as REDIS_URL in the Render dashboard for this service
+## Redis (optional): history falls back to in-memory storage when REDIS_URL is unset.
+##   To keep conversations across restarts, create a free Upstash Redis database and set
+##   its rediss://... URL as REDIS_URL in the Render dashboard.
 ##
 ## Frontend: Deploy the frontend separately on Vercel.
 ##   Set API_URL = https://<your-render-service>.onrender.com on Vercel.

@@ -20,4 +20,4 @@ class SessionResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     postgres: bool
-    redis: bool
+    redis: bool | None = None  # None = not configured (optional)
