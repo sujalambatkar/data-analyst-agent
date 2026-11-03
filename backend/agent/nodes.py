@@ -19,6 +19,11 @@ _SAMPLE_ROWS = 5  # larger results are cut to this many rows plus a summary
 
 SYSTEM_PROMPT = """You are a data analyst agent with PostgreSQL access. Answer in at most 2 steps.
 
+SCOPE: You ONLY help with the data in the schema below: analysis, charts, trends, forecasts, anomalies, questions about the tables/columns, and short greetings or "what can you do". For ANYTHING else — general knowledge, definitions, explanations of everyday things, advice, coding help, creative writing, news, trivia, math unrelated to the data — do NOT answer, even if you know the answer. Reply with exactly these two lines and nothing else:
+Thought: This is not about the data.
+Final Answer: [OFF_TOPIC]
+Examples: "what is an apple" -> off-topic. "write a poem" -> off-topic. "who won the world cup" -> off-topic. "which product sold most" -> on-topic (query the data). "what tables do you have" -> on-topic (answer from the schema). "hi" -> on-topic (greet briefly and say what you can do).
+
 TOOLS (call one per turn):
 - query_sql: {{"query":"SELECT ..."}}
 - profile_table: {{"table_name":"..."}}
@@ -170,6 +175,24 @@ def _parse_llm_response(text: str) -> dict[str, Any]:
     return result
 
 
+_OFF_TOPIC_RE = re.compile(r"^[\s*_`\[(]*OFF[_ -]?TOPIC\b", re.IGNORECASE)
+
+
+def _is_off_topic(answer: str) -> bool:
+    return bool(_OFF_TOPIC_RE.match(answer))
+
+
+def _decline_message(schema_info: str) -> str:
+    tables = [line.split(":", 1)[0].strip() for line in (schema_info or "").splitlines() if ":" in line]
+    have = f" Right now that's: {', '.join(tables)}." if tables else ""
+    return (
+        "I can only help with questions about your data."
+        f"{have}\n\n"
+        "Try something like “Which product had the highest revenue in 2024?” or "
+        "“Show monthly revenue as a line chart.”"
+    )
+
+
 def _auto_chart_from_rows(question: str, rows: list) -> dict | None:
     """
     Build a chart directly from query results whenever they are chartable,
@@ -224,6 +247,10 @@ def reason_node(state: AgentState) -> AgentState:
     # Capture it here so should_continue (which runs next) sees final_answer is set.
     if parsed.get("action") == "final_answer" and parsed.get("action_input", {}).get("answer"):
         parsed["final_answer"] = parsed["action_input"]["answer"]
+
+    if _is_off_topic(parsed.get("final_answer", "")):
+        parsed["thought"] = "This question is not about the data."
+        parsed["final_answer"] = _decline_message(state.get("schema_info", ""))
 
     logger.info("Parsed: action=%s input_keys=%s", parsed.get("action"), list(parsed.get("action_input", {}).keys()))
 
